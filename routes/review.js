@@ -2,6 +2,7 @@ const express = require("express");
 
 const Review = require("../models/Review");
 const Product = require("../models/Product");
+const pool = require("../config/db");
 
 const authenticateUser = require("../middleware/auth");
 const authorizeRole = require("../middleware/authorizeRole");
@@ -45,7 +46,7 @@ const handleError = (res, error) => {
 router.post(
   "/",
   authenticateUser,
-  authorizeRole("buyer", "vendor"),
+  authorizeRole("buyer"),
   async (req, res) => {
     try {
       const { product, rating, comment } = req.body;
@@ -87,6 +88,22 @@ router.post(
         return res.status(404).json({
           success: false,
           message: "Product not found",
+        });
+      }
+
+      const [purchases] = await pool.execute(
+        `SELECT 1
+         FROM orders o
+         INNER JOIN order_items oi ON oi.order_id = o.order_id
+         WHERE o.buyer_id = ? AND oi.product_id = ? AND o.status = 'Delivered'
+         LIMIT 1`,
+        [req.user.buyer_id, Number(product)],
+      );
+
+      if (purchases.length === 0) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only review products from delivered orders",
         });
       }
 

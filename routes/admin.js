@@ -138,4 +138,45 @@ router.get(
   },
 );
 
+// ACTIVATE OR DEACTIVATE A USER (ADMIN ONLY)
+router.patch(
+  "/admin/users/:id/status",
+  authenticateUser,
+  authorizeRole("admin"),
+  async (req, res) => {
+    try {
+      const userId = Number(req.params.id);
+      const { isActive } = req.body;
+
+      if (!Number.isSafeInteger(userId) || userId < 1) {
+        return res.status(400).json({ success: false, message: "Invalid user ID" });
+      }
+
+      if (typeof isActive !== "boolean") {
+        return res.status(400).json({ success: false, message: "isActive must be true or false" });
+      }
+
+      if (userId === req.user.user_id && !isActive) {
+        return res.status(400).json({ success: false, message: "You cannot deactivate your own account" });
+      }
+
+      const [result] = await pool.execute(
+        "UPDATE users SET is_active = ? WHERE user_id = ?",
+        [isActive, userId],
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `User account ${isActive ? "activated" : "deactivated"} successfully`,
+      });
+    } catch (error) {
+      return handleError(res, error);
+    }
+  },
+);
+
 module.exports = router;

@@ -230,7 +230,24 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
-    const deleted = await Buyer.delete(Number(id));
+    const buyerId = Number(id);
+
+    const [linkedRecords] = await pool.execute(
+      `SELECT
+         (SELECT COUNT(*) FROM users WHERE buyer_id = ?) AS users,
+         (SELECT COUNT(*) FROM carts WHERE buyer_id = ?) AS carts,
+         (SELECT COUNT(*) FROM orders WHERE buyer_id = ?) AS orders`,
+      [buyerId, buyerId, buyerId],
+    );
+
+    if (Object.values(linkedRecords[0]).some((count) => Number(count) > 0)) {
+      return res.status(409).json({
+        success: false,
+        message: "Cannot delete a buyer with linked user, cart, or order records",
+      });
+    }
+
+    const deleted = await Buyer.delete(buyerId);
 
     if (!deleted) {
       return res.status(404).json({

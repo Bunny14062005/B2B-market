@@ -199,10 +199,17 @@ router.put("/:id", authenticateUser, authorizeRole("admin"), async (req, res) =>
       });
     }
 
-    if (!["Pending", "Shipped", "Delivered", "Cancelled"].includes(status)) {
+    const allowedTransitions = {
+      Pending: ["Shipped"],
+      Shipped: ["Delivered"],
+      Delivered: [],
+      Cancelled: [],
+    };
+
+    if (!allowedTransitions[existingOrder.status]?.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid status value",
+        message: `Cannot change an order from ${existingOrder.status} to ${status}`,
       });
     }
 

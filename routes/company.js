@@ -189,27 +189,16 @@ router.put("/", authenticateUser, authorizeRole("admin"), async (req, res) => {
   }
 });
 
-// DELETE COMPANY PROFILE
+// Company identity is a required singleton record and is intentionally not deletable.
 router.delete(
   "/",
   authenticateUser,
   authorizeRole("admin"),
   async (req, res) => {
     try {
-      const company = await Company.findOne();
-
-      if (!company) {
-        return res.status(404).json({
-          success: false,
-          message: "Company not found",
-        });
-      }
-
-      await Company.delete(company._id);
-
-      return res.status(200).json({
-        success: true,
-        message: "Company profile deleted successfully",
+      return res.status(405).json({
+        success: false,
+        message: "Company profiles cannot be deleted; update the profile instead",
       });
     } catch (error) {
       console.error(error);

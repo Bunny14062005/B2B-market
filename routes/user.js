@@ -392,12 +392,13 @@ router.put("/profile", authenticateUser, async (req, res) => {
   }
 });
 
-// DELETE PROFILE
+// DEACTIVATE PROFILE
 router.delete("/profile", authenticateUser, async (req, res) => {
   try {
-    const [result] = await pool.execute("DELETE FROM users WHERE user_id = ?", [
-      req.user.user_id,
-    ]);
+    const [result] = await pool.execute(
+      "UPDATE users SET is_active = 0 WHERE user_id = ?",
+      [req.user.user_id],
+    );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({
@@ -408,7 +409,7 @@ router.delete("/profile", authenticateUser, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "User account deleted successfully",
+      message: "User account deactivated successfully",
     });
   } catch (error) {
     handleError(res, error);

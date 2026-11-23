@@ -232,6 +232,18 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
+    const [linkedUsers] = await pool.execute(
+      "SELECT user_id FROM users WHERE vendor_id = ? LIMIT 1",
+      [vendorId],
+    );
+
+    if (linkedUsers.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "Cannot delete a vendor with a linked user account",
+      });
+    }
+
     const [products] = await pool.execute(
       "SELECT product_id FROM products WHERE vendor_id = ? LIMIT 1",
       [vendorId],
