@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
+const cors = require("cors");
 
 const pool = require("./config/db");
 
@@ -20,11 +21,18 @@ const reviewRoutes = require("./routes/review");
 
 const app = express();
 
+app.use(
+  cors({
+    origin: "http://localhost:3001",
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
+
 app.use(express.json());
 
 app.use(express.static(path.join(__dirname, "public")));
 
-// API routes
 app.use("/api/users", userRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api", adminRoutes);

@@ -6,67 +6,121 @@ const authorizeRole = require("../middleware/authorizeRole");
 
 const router = express.Router();
 
-// CREATE COMPANY PROFILE
+const isValidId = (id) =>
+  /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id));
+
+const validateCompany = (body) => {
+  const { companyName, email, phone, address, businessDescription } = body;
+
+  if (
+    typeof companyName !== "string" ||
+    typeof email !== "string" ||
+    typeof phone !== "string" ||
+    typeof address !== "string"
+  ) {
+    return "Company name, email, phone and address are required";
+  }
+
+  if (
+    !companyName.trim() ||
+    !email.trim() ||
+    !phone.trim() ||
+    !address.trim()
+  ) {
+    return "Required fields cannot contain only spaces";
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    return "Please provide a valid email address";
+  }
+
+  if (
+    businessDescription !== undefined &&
+    typeof businessDescription !== "string"
+  ) {
+    return "Business description must be a string";
+  }
+
+  return null;
+};
+
+router.get("/", authenticateUser, authorizeRole("admin"), async (req, res) => {
+  try {
+    const companies = await Company.findAll();
+
+    return res.status(200).json({
+      success: true,
+      count: companies.length,
+      companies,
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch companies",
+    });
+  }
+});
+
+router.get(
+  "/:id",
+  authenticateUser,
+  authorizeRole("admin"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!isValidId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid company ID",
+        });
+      }
+
+      const company = await Company.findById(Number(id));
+
+      if (!company) {
+        return res.status(404).json({
+          success: false,
+          message: "Company not found",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        company,
+      });
+    } catch (error) {
+      console.error(error);
+
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch company",
+      });
+    }
+  },
+);
+
 router.post("/", authenticateUser, authorizeRole("admin"), async (req, res) => {
   try {
+    const validationError = validateCompany(req.body);
+
+    if (validationError) {
+      return res.status(400).json({
+        success: false,
+        message: validationError,
+      });
+    }
+
     const { companyName, email, phone, address, businessDescription } =
       req.body;
 
-    if (
-      typeof companyName !== "string" ||
-      typeof email !== "string" ||
-      typeof phone !== "string" ||
-      typeof address !== "string"
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Company name, email, phone and address are required",
-      });
-    }
-
-    const cleanCompanyName = companyName.trim();
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPhone = phone.trim();
-    const cleanAddress = address.trim();
-
-    if (!cleanCompanyName || !cleanEmail || !cleanPhone || !cleanAddress) {
-      return res.status(400).json({
-        success: false,
-        message: "Required fields cannot contain only spaces",
-      });
-    }
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide a valid email address",
-      });
-    }
-
-    if (
-      businessDescription !== undefined &&
-      typeof businessDescription !== "string"
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Business description must be a string",
-      });
-    }
-
-    const existingCompany = await Company.findOne();
-
-    if (existingCompany) {
-      return res.status(409).json({
-        success: false,
-        message: "Company profile already exists",
-      });
-    }
-
     const company = await Company.create({
-      companyName: cleanCompanyName,
-      email: cleanEmail,
-      phone: cleanPhone,
-      address: cleanAddress,
+      companyName: companyName.trim(),
+      email: email.trim().toLowerCase(),
+      phone: phone.trim(),
+      address: address.trim(),
       businessDescription: businessDescription
         ? businessDescription.trim()
         : "",
@@ -74,7 +128,7 @@ router.post("/", authenticateUser, authorizeRole("admin"), async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Company profile created successfully",
+      message: "Company created successfully",
       company,
     });
   } catch (error) {
@@ -82,130 +136,124 @@ router.post("/", authenticateUser, authorizeRole("admin"), async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Failed to create company profile",
+      message: "Failed to create company",
     });
   }
 });
 
-// GET COMPANY PROFILE
-router.get("/", authenticateUser, authorizeRole("admin"), async (req, res) => {
-  try {
-    const company = await Company.findOne();
-
-    if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: "Company not found",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      company,
-    });
-  } catch (error) {
-    console.error(error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch company",
-    });
-  }
-});
-
-// UPDATE COMPANY PROFILE
-router.put("/", authenticateUser, authorizeRole("admin"), async (req, res) => {
-  try {
-    const { companyName, email, phone, address, businessDescription } =
-      req.body;
-
-    if (
-      typeof companyName !== "string" ||
-      !companyName.trim() ||
-      typeof email !== "string" ||
-      !email.trim() ||
-      typeof phone !== "string" ||
-      !phone.trim() ||
-      typeof address !== "string" ||
-      !address.trim()
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Company name, email, phone, and address are required",
-      });
-    }
-
-    const cleanEmail = email.trim().toLowerCase();
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid email address",
-      });
-    }
-
-    if (
-      businessDescription !== undefined &&
-      typeof businessDescription !== "string"
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Business description must be a string",
-      });
-    }
-
-    const existingCompany = await Company.findOne();
-
-    if (!existingCompany) {
-      return res.status(404).json({
-        success: false,
-        message: "Company profile not found",
-      });
-    }
-
-    const company = await Company.update(existingCompany._id, {
-      companyName: companyName.trim(),
-      email: cleanEmail,
-      phone: phone.trim(),
-      address: address.trim(),
-      businessDescription:
-        businessDescription === undefined
-          ? existingCompany.businessDescription
-          : businessDescription.trim(),
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Company profile updated successfully",
-      company,
-    });
-  } catch (error) {
-    console.error(error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to update company profile",
-    });
-  }
-});
-
-// Company identity is a required singleton record and is intentionally not deletable.
-router.delete(
-  "/",
+router.put(
+  "/:id",
   authenticateUser,
   authorizeRole("admin"),
   async (req, res) => {
     try {
-      return res.status(405).json({
-        success: false,
-        message: "Company profiles cannot be deleted; update the profile instead",
+      const { id } = req.params;
+
+      if (!isValidId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid company ID",
+        });
+      }
+
+      const validationError = validateCompany(req.body);
+
+      if (validationError) {
+        return res.status(400).json({
+          success: false,
+          message: validationError,
+        });
+      }
+
+      const existingCompany = await Company.findById(Number(id));
+
+      if (!existingCompany) {
+        return res.status(404).json({
+          success: false,
+          message: "Company not found",
+        });
+      }
+
+      const { companyName, email, phone, address, businessDescription } =
+        req.body;
+
+      const company = await Company.update(Number(id), {
+        companyName: companyName.trim(),
+        email: email.trim().toLowerCase(),
+        phone: phone.trim(),
+        address: address.trim(),
+        businessDescription: businessDescription
+          ? businessDescription.trim()
+          : "",
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Company updated successfully",
+        company,
       });
     } catch (error) {
       console.error(error);
 
       return res.status(500).json({
         success: false,
-        message: "Failed to delete company profile",
+        message: "Failed to update company",
+      });
+    }
+  },
+);
+
+router.delete(
+  "/:id",
+  authenticateUser,
+  authorizeRole("admin"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!isValidId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid company ID",
+        });
+      }
+
+      const existingCompany = await Company.findById(Number(id));
+
+      if (!existingCompany) {
+        return res.status(404).json({
+          success: false,
+          message: "Company not found",
+        });
+      }
+
+      const deleted = await Company.delete(Number(id));
+
+      if (!deleted) {
+        return res.status(404).json({
+          success: false,
+          message: "Company not found",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Company deleted successfully",
+      });
+    } catch (error) {
+      console.error(error);
+
+      if (error.code === "ER_ROW_IS_REFERENCED_2") {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Company cannot be deleted because other records depend on it",
+        });
+      }
+
+      return res.status(500).json({
+        success: false,
+        message: "Failed to delete company",
       });
     }
   },

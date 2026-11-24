@@ -59,19 +59,10 @@ router.post("/register", async (req, res) => {
       businessType,
     } = req.body;
 
-    if (
-      !name ||
-      !email ||
-      !password ||
-      !phone ||
-      !role ||
-      !companyName ||
-      !address ||
-      !businessType
-    ) {
+    if (!name || !email || !password || !phone || !role) {
       return res.status(400).json({
         success: false,
-        message: "All registration fields are required",
+        message: "Name, email, password, phone and role are required",
       });
     }
 
@@ -79,32 +70,26 @@ router.post("/register", async (req, res) => {
       typeof name !== "string" ||
       typeof email !== "string" ||
       typeof password !== "string" ||
-      typeof phone !== "string" ||
-      typeof companyName !== "string" ||
-      typeof address !== "string" ||
-      typeof businessType !== "string"
+      typeof phone !== "string"
     ) {
       return res.status(400).json({
         success: false,
-        message: "All fields must contain valid text",
+        message: "Name, email, password and phone must contain valid text",
+      });
+    }
+
+    if (!["buyer", "vendor"].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: "Role must be buyer or vendor",
       });
     }
 
     const cleanName = name.trim();
     const cleanEmail = email.trim().toLowerCase();
     const cleanPhone = phone.trim();
-    const cleanCompanyName = companyName.trim();
-    const cleanAddress = address.trim();
-    const cleanBusinessType = businessType.trim();
 
-    if (
-      !cleanName ||
-      !cleanEmail ||
-      !cleanPhone ||
-      !cleanCompanyName ||
-      !cleanAddress ||
-      !cleanBusinessType
-    ) {
+    if (!cleanName || !cleanEmail || !cleanPhone) {
       return res.status(400).json({
         success: false,
         message: "Fields cannot contain only spaces",
@@ -125,11 +110,28 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    if (!["buyer", "vendor"].includes(role)) {
-      return res.status(400).json({
-        success: false,
-        message: "Role must be buyer or vendor",
-      });
+    let cleanCompanyName = "";
+    let cleanAddress = "";
+    let cleanBusinessType = "";
+
+    if (role === "vendor") {
+      if (
+        typeof companyName !== "string" ||
+        typeof address !== "string" ||
+        typeof businessType !== "string" ||
+        !companyName.trim() ||
+        !address.trim() ||
+        !businessType.trim()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "All vendor business fields are required",
+        });
+      }
+
+      cleanCompanyName = companyName.trim();
+      cleanAddress = address.trim();
+      cleanBusinessType = businessType.trim();
     }
 
     if (!process.env.JWT_SECRET) {
@@ -157,7 +159,6 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    const businessTable = role === "buyer" ? "buyers" : "vendors";
     const otherBusinessTable = role === "buyer" ? "vendors" : "buyers";
 
     const [otherBusiness] = await connection.execute(
@@ -174,37 +175,38 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    let businessId;
+    let vendorId = null;
 
-    const [existingBusiness] = await connection.execute(
-      `SELECT ${role}_id FROM ${businessTable} WHERE email = ?`,
-      [cleanEmail],
-    );
-
-    if (existingBusiness.length > 0) {
-      businessId = existingBusiness[0][`${role}_id`];
-    } else {
-      const [businessResult] = await connection.execute(
-        `INSERT INTO ${businessTable}
-         (company_name, contact_name, email, phone, address, business_type)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          cleanCompanyName,
-          cleanName,
-          cleanEmail,
-          cleanPhone,
-          cleanAddress,
-          cleanBusinessType,
-        ],
+    if (role === "vendor") {
+      const [existingVendor] = await connection.execute(
+        "SELECT vendor_id FROM vendors WHERE email = ?",
+        [cleanEmail],
       );
 
-      businessId = businessResult.insertId;
+      if (existingVendor.length > 0) {
+        vendorId = existingVendor[0].vendor_id;
+      } else {
+        const [vendorResult] = await connection.execute(
+          `INSERT INTO vendors
+           (company_name, contact_name, email, phone, address, business_type)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            cleanCompanyName,
+            cleanName,
+            cleanEmail,
+            cleanPhone,
+            cleanAddress,
+            cleanBusinessType,
+          ],
+        );
+
+        vendorId = vendorResult.insertId;
+      }
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    const buyerId = role === "buyer" ? businessId : null;
-    const vendorId = role === "vendor" ? businessId : null;
+    const buyerId = null;
 
     const [userResult] = await connection.execute(
       `INSERT INTO users

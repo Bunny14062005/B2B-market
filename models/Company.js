@@ -16,9 +16,18 @@ const formatCompany = (company) => {
 };
 
 const Company = {
-  async findOne() {
+  async findAll() {
     const [rows] = await pool.execute(
-      "SELECT * FROM companies ORDER BY company_id ASC LIMIT 1",
+      "SELECT * FROM companies ORDER BY company_id DESC",
+    );
+
+    return rows.map(formatCompany);
+  },
+
+  async findById(companyId) {
+    const [rows] = await pool.execute(
+      "SELECT * FROM companies WHERE company_id = ? LIMIT 1",
+      [companyId],
     );
 
     return formatCompany(rows[0]);
@@ -46,17 +55,17 @@ const Company = {
       ],
     );
 
-    const [rows] = await pool.execute(
-      "SELECT * FROM companies WHERE company_id = ? LIMIT 1",
-      [result.insertId],
-    );
-
-    return formatCompany(rows[0]);
+    return this.findById(result.insertId);
   },
 
   async update(companyId, companyData) {
-    const { companyName, email, phone, address, businessDescription } =
-      companyData;
+    const {
+      companyName,
+      email,
+      phone,
+      address,
+      businessDescription = "",
+    } = companyData;
 
     await pool.execute(
       `UPDATE companies
@@ -76,12 +85,7 @@ const Company = {
       ],
     );
 
-    const [rows] = await pool.execute(
-      "SELECT * FROM companies WHERE company_id = ? LIMIT 1",
-      [companyId],
-    );
-
-    return formatCompany(rows[0]);
+    return this.findById(companyId);
   },
 
   async delete(companyId) {
