@@ -218,7 +218,7 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// DELETE BUYER
+// DEACTIVATE BUYER BUSINESS
 router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -231,37 +231,71 @@ router.delete("/:id", async (req, res) => {
     }
 
     const buyerId = Number(id);
+    const buyer = await Buyer.findById(buyerId);
 
-    const [linkedRecords] = await pool.execute(
-      `SELECT
-         (SELECT COUNT(*) FROM users WHERE buyer_id = ?) AS users,
-         (SELECT COUNT(*) FROM carts WHERE buyer_id = ?) AS carts,
-         (SELECT COUNT(*) FROM orders WHERE buyer_id = ?) AS orders`,
-      [buyerId, buyerId, buyerId],
-    );
-
-    if (Object.values(linkedRecords[0]).some((count) => Number(count) > 0)) {
-      return res.status(409).json({
-        success: false,
-        message: "Cannot delete a buyer with linked user, cart, or order records",
-      });
-    }
-
-    const deleted = await Buyer.delete(buyerId);
-
-    if (!deleted) {
+    if (!buyer) {
       return res.status(404).json({
         success: false,
         message: "Buyer not found",
       });
     }
 
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+      await connection.execute("UPDATE buyers SET is_active = 0 WHERE buyer_id = ?", [buyerId]);
+      await connection.execute("UPDATE users SET is_active = 0 WHERE buyer_id = ?", [buyerId]);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
     return res.status(200).json({
       success: true,
-      message: "Buyer deleted successfully",
+      message: "Buyer business deactivated successfully",
     });
   } catch (error) {
     handleError(res, error);
+  }
+});
+
+// ACTIVATE OR DEACTIVATE BUYER BUSINESS
+router.patch("/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isActive } = req.body;
+
+    if (!isValidId(id) || typeof isActive !== "boolean") {
+      return res.status(400).json({ success: false, message: "Valid buyer ID and isActive boolean are required" });
+    }
+
+    const buyer = await Buyer.findById(Number(id));
+
+    if (!buyer) {
+      return res.status(404).json({ success: false, message: "Buyer not found" });
+    }
+
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+      await connection.execute("UPDATE buyers SET is_active = ? WHERE buyer_id = ?", [isActive, Number(id)]);
+      await connection.execute("UPDATE users SET is_active = ? WHERE buyer_id = ?", [isActive, Number(id)]);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
+    return res.status(200).json({ success: true, message: `Buyer business ${isActive ? "activated" : "deactivated"} successfully` });
+  } catch (error) {
+    return handleError(res, error);
   }
 });
 

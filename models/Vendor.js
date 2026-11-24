@@ -26,6 +26,15 @@ const Vendor = {
     return rows;
   },
 
+  async setActive(vendorId, isActive) {
+    await pool.execute("UPDATE vendors SET is_active = ? WHERE vendor_id = ?", [
+      isActive,
+      vendorId,
+    ]);
+
+    return this.findById(vendorId);
+  },
+
   async create(vendorData) {
     const { companyName, contactName, email, phone, address, businessType } =
       vendorData;
@@ -74,14 +83,6 @@ const Vendor = {
     return this.findById(vendorId);
   },
 
-  async delete(vendorId) {
-    const [result] = await pool.execute(
-      "DELETE FROM vendors WHERE vendor_id = ?",
-      [vendorId],
-    );
-
-    return result.affectedRows > 0;
-  },
 };
 
 module.exports = Vendor;

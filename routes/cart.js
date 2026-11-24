@@ -54,7 +54,7 @@ router.post("/items", async (req, res) => {
     const [productRows] = await pool.execute(
       `SELECT product_id, quantity
        FROM products
-       WHERE product_id = ?
+       WHERE product_id = ? AND is_available = 1
        LIMIT 1`,
       [Number(productId)],
     );
@@ -153,7 +153,7 @@ router.put("/items/:productId", async (req, res) => {
     const [productRows] = await pool.execute(
       `SELECT product_id, quantity
        FROM products
-       WHERE product_id = ?
+       WHERE product_id = ? AND is_available = 1
        LIMIT 1`,
       [Number(productId)],
     );

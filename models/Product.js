@@ -27,6 +27,7 @@ const Product = {
        FROM products p
        INNER JOIN categories c ON p.category_id = c.category_id
        INNER JOIN vendors v ON p.vendor_id = v.vendor_id
+       WHERE p.is_available = 1
        ORDER BY p.created_at DESC`,
     );
 
@@ -63,13 +64,13 @@ const Product = {
     return this.findById(productId);
   },
 
-  async delete(productId) {
-    const [result] = await pool.execute(
-      "DELETE FROM products WHERE product_id = ?",
-      [productId],
+  async setAvailability(productId, isAvailable) {
+    await pool.execute(
+      "UPDATE products SET is_available = ? WHERE product_id = ?",
+      [isAvailable, productId],
     );
 
-    return result.affectedRows > 0;
+    return this.findById(productId);
   },
 };
 

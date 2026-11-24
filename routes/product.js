@@ -88,6 +88,7 @@ const formatProduct = (product) => {
     },
     averageRating: Number(product.average_rating),
     numReviews: product.num_reviews,
+    isAvailable: Boolean(product.is_available),
     createdAt: product.created_at,
     updatedAt: product.updated_at,
   };
@@ -215,7 +216,7 @@ router.get("/", async (req, res) => {
   try {
     const { search, category, sort } = req.query;
 
-    const conditions = [];
+    const conditions = ["p.is_available = 1"];
     const values = [];
 
     if (search) {
@@ -311,7 +312,7 @@ router.get("/:id", async (req, res) => {
 
     const product = await getProductDetails(Number(id));
 
-    if (!product) {
+    if (!product || !product.is_available) {
       return res.status(404).json({
         success: false,
         message: "Product not found",
@@ -424,7 +425,7 @@ router.put("/:id", authenticateUser, authorizeRole("admin", "vendor"), async (re
   }
 });
 
-// DELETE PRODUCT
+// ARCHIVE PRODUCT
 router.delete("/:id", authenticateUser, authorizeRole("admin", "vendor"), async (req, res) => {
   try {
     const { id } = req.params;
@@ -449,14 +450,46 @@ router.delete("/:id", authenticateUser, authorizeRole("admin", "vendor"), async 
       return res.status(403).json({ success: false, message: "You can only delete your own products" });
     }
 
-    await Product.delete(Number(id));
+    await Product.setAvailability(Number(id), false);
 
     return res.status(200).json({
       success: true,
-      message: "Product deleted successfully",
+      message: "Product archived successfully",
     });
   } catch (error) {
     handleError(res, error);
+  }
+});
+
+// RESTORE OR ARCHIVE PRODUCT
+router.patch("/:id/availability", authenticateUser, authorizeRole("admin", "vendor"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isAvailable } = req.body;
+
+    if (!isValidId(id) || typeof isAvailable !== "boolean") {
+      return res.status(400).json({ success: false, message: "Valid product ID and isAvailable boolean are required" });
+    }
+
+    const product = await getProductDetails(Number(id));
+
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    if (req.user.role === "vendor" && req.user.vendor_id !== product.vendor_id) {
+      return res.status(403).json({ success: false, message: "You can only change availability for your own products" });
+    }
+
+    const updatedProduct = await Product.setAvailability(Number(id), isAvailable);
+
+    return res.status(200).json({
+      success: true,
+      message: `Product ${isAvailable ? "restored" : "archived"} successfully`,
+      product: updatedProduct,
+    });
+  } catch (error) {
+    return handleError(res, error);
   }
 });
 

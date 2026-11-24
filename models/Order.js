@@ -110,7 +110,7 @@ const Order = {
         const [productRows] = await connection.execute(
           `SELECT product_id, name, price, quantity
            FROM products
-           WHERE product_id = ?
+           WHERE product_id = ? AND is_available = 1
            FOR UPDATE`,
           [item.product],
         );

@@ -209,7 +209,7 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// DELETE VENDOR
+// DEACTIVATE VENDOR BUSINESS
 router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -232,38 +232,63 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
-    const [linkedUsers] = await pool.execute(
-      "SELECT user_id FROM users WHERE vendor_id = ? LIMIT 1",
-      [vendorId],
-    );
+    const connection = await pool.getConnection();
 
-    if (linkedUsers.length > 0) {
-      return res.status(409).json({
-        success: false,
-        message: "Cannot delete a vendor with a linked user account",
-      });
+    try {
+      await connection.beginTransaction();
+      await connection.execute("UPDATE vendors SET is_active = 0 WHERE vendor_id = ?", [vendorId]);
+      await connection.execute("UPDATE users SET is_active = 0 WHERE vendor_id = ?", [vendorId]);
+      await connection.execute("UPDATE products SET is_available = 0 WHERE vendor_id = ?", [vendorId]);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
-
-    const [products] = await pool.execute(
-      "SELECT product_id FROM products WHERE vendor_id = ? LIMIT 1",
-      [vendorId],
-    );
-
-    if (products.length > 0) {
-      return res.status(409).json({
-        success: false,
-        message: "Cannot delete this vendor because products are linked to it",
-      });
-    }
-
-    await Vendor.delete(vendorId);
 
     return res.status(200).json({
       success: true,
-      message: "Vendor deleted successfully",
+      message: "Vendor business and products deactivated successfully",
     });
   } catch (error) {
     handleError(res, error);
+  }
+});
+
+// ACTIVATE OR DEACTIVATE VENDOR BUSINESS
+router.patch("/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isActive } = req.body;
+
+    if (!isValidId(id) || typeof isActive !== "boolean") {
+      return res.status(400).json({ success: false, message: "Valid vendor ID and isActive boolean are required" });
+    }
+
+    const vendor = await Vendor.findById(Number(id));
+
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+      await connection.execute("UPDATE vendors SET is_active = ? WHERE vendor_id = ?", [isActive, Number(id)]);
+      await connection.execute("UPDATE users SET is_active = ? WHERE vendor_id = ?", [isActive, Number(id)]);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
+    return res.status(200).json({ success: true, message: `Vendor business ${isActive ? "activated" : "deactivated"} successfully` });
+  } catch (error) {
+    return handleError(res, error);
   }
 });
 

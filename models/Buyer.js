@@ -26,6 +26,15 @@ const Buyer = {
     return rows;
   },
 
+  async setActive(buyerId, isActive) {
+    await pool.execute("UPDATE buyers SET is_active = ? WHERE buyer_id = ?", [
+      isActive,
+      buyerId,
+    ]);
+
+    return this.findById(buyerId);
+  },
+
   async create(buyerData) {
     const { companyName, contactName, email, phone, address, businessType } =
       buyerData;
@@ -74,14 +83,6 @@ const Buyer = {
     return this.findById(buyerId);
   },
 
-  async delete(buyerId) {
-    const [result] = await pool.execute(
-      "DELETE FROM buyers WHERE buyer_id = ?",
-      [buyerId],
-    );
-
-    return result.affectedRows > 0;
-  },
 };
 
 module.exports = Buyer;

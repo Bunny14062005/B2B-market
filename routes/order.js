@@ -3,6 +3,7 @@ const express = require("express");
 const Order = require("../models/Order");
 const authenticateUser = require("../middleware/auth");
 const authorizeRole = require("../middleware/authorizeRole");
+const { canTransitionOrder } = require("../utils/orderStatus");
 
 const router = express.Router();
 
@@ -199,14 +200,7 @@ router.put("/:id", authenticateUser, authorizeRole("admin"), async (req, res) =>
       });
     }
 
-    const allowedTransitions = {
-      Pending: ["Shipped"],
-      Shipped: ["Delivered"],
-      Delivered: [],
-      Cancelled: [],
-    };
-
-    if (!allowedTransitions[existingOrder.status]?.includes(status)) {
+    if (!canTransitionOrder(existingOrder.status, status)) {
       return res.status(400).json({
         success: false,
         message: `Cannot change an order from ${existingOrder.status} to ${status}`,
