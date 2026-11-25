@@ -5,6 +5,7 @@ const crypto = require("crypto");
 
 const pool = require("../config/db");
 const authenticateUser = require("../middleware/auth");
+const { sendPasswordResetEmail } = require("../services/emailService");
 
 const router = express.Router();
 
@@ -423,7 +424,7 @@ router.put("/forgot-password", async (req, res) => {
   try {
     const { email } = req.body;
 
-    if (!email || typeof email !== "string") {
+    if (typeof email !== "string" || !email.trim()) {
       return res.status(400).json({
         success: false,
         message: "Email is required",
@@ -432,40 +433,72 @@ router.put("/forgot-password", async (req, res) => {
 
     const cleanEmail = email.trim().toLowerCase();
 
-    const [rows] = await pool.execute(
-      "SELECT user_id FROM users WHERE email = ?",
-      [cleanEmail],
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({
         success: false,
-        message: "User not found",
+        message: "Please provide a valid email address",
       });
     }
 
-    const resetToken = crypto.randomBytes(32).toString("hex");
-
-    const hashedToken = crypto
-      .createHash("sha256")
-      .update(resetToken)
-      .digest("hex");
-
-    const expiry = new Date(Date.now() + 15 * 60 * 1000);
-
-    await pool.execute(
-      `UPDATE users
-       SET reset_password_token = ?,
-           reset_password_expires = ?
-       WHERE user_id = ?`,
-      [hashedToken, expiry, rows[0].user_id],
+    const [rows] = await pool.execute(
+      "SELECT user_id FROM users WHERE email = ? AND is_active = 1 LIMIT 1",
+      [cleanEmail],
     );
+
+    if (rows.length > 0) {
+      const userId = rows[0].user_id;
+      const resetToken = crypto.randomBytes(32).toString("hex");
+
+      const hashedToken = crypto
+        .createHash("sha256")
+        .update(resetToken)
+        .digest("hex");
+
+      const expiry = new Date(Date.now() + 15 * 60 * 1000);
+
+      await pool.execute(
+        `UPDATE password_reset_tokens
+         SET used_at = NOW()
+         WHERE user_id = ? AND used_at IS NULL`,
+        [userId],
+      );
+
+      await pool.execute(
+        `INSERT INTO password_reset_tokens
+         (user_id, token_hash, expires_at)
+         VALUES (?, ?, ?)`,
+        [userId, hashedToken, expiry],
+      );
+
+      const frontendUrl = process.env.FRONTEND_URL;
+
+      if (!frontendUrl) {
+        await pool.execute(
+          "DELETE FROM password_reset_tokens WHERE token_hash = ?",
+          [hashedToken],
+        );
+
+        throw new Error("FRONTEND_URL is not configured");
+      }
+
+      const resetLink = `${frontendUrl.replace(/\/+$/, "")}/reset-password?token=${resetToken}`;
+
+      try {
+        await sendPasswordResetEmail(cleanEmail, resetLink);
+      } catch (emailError) {
+        await pool.execute(
+          "DELETE FROM password_reset_tokens WHERE token_hash = ?",
+          [hashedToken],
+        );
+
+        throw emailError;
+      }
+    }
 
     return res.status(200).json({
       success: true,
-      message: "Password reset token generated successfully",
-      resetToken,
-      expiresIn: "15 minutes",
+      message:
+        "If an active account exists with that email, a password reset link has been sent.",
     });
   } catch (error) {
     handleError(res, error);
@@ -474,20 +507,27 @@ router.put("/forgot-password", async (req, res) => {
 
 // RESET PASSWORD
 router.post("/reset-password", async (req, res) => {
-  try {
-    const { resetToken, newPassword } = req.body;
+  let connection;
 
-    if (!resetToken || !newPassword) {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (
+      typeof token !== "string" ||
+      typeof newPassword !== "string" ||
+      !token ||
+      !newPassword
+    ) {
       return res.status(400).json({
         success: false,
         message: "Reset token and new password are required",
       });
     }
 
-    if (typeof resetToken !== "string" || typeof newPassword !== "string") {
+    if (!/^[a-f0-9]{64}$/i.test(token)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid input",
+        message: "Invalid or expired reset link",
       });
     }
 
@@ -498,42 +538,64 @@ router.post("/reset-password", async (req, res) => {
       });
     }
 
-    const hashedToken = crypto
-      .createHash("sha256")
-      .update(resetToken)
-      .digest("hex");
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
-    const [rows] = await pool.execute(
-      `SELECT user_id FROM users
-       WHERE reset_password_token = ?
-       AND reset_password_expires > NOW()`,
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+    connection = await pool.getConnection();
+
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT user_id
+       FROM password_reset_tokens
+       WHERE token_hash = ?
+         AND expires_at > NOW()
+         AND used_at IS NULL
+       LIMIT 1
+       FOR UPDATE`,
       [hashedToken],
     );
 
     if (rows.length === 0) {
+      await connection.rollback();
+
       return res.status(400).json({
         success: false,
-        message: "Invalid or expired reset token",
+        message: "Invalid or expired reset link",
       });
     }
 
-    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    const userId = rows[0].user_id;
 
-    await pool.execute(
-      `UPDATE users
-       SET password = ?,
-           reset_password_token = NULL,
-           reset_password_expires = NULL
-       WHERE user_id = ?`,
-      [hashedPassword, rows[0].user_id],
+    await connection.execute(
+      "UPDATE users SET password = ? WHERE user_id = ?",
+      [hashedPassword, userId],
     );
+
+    await connection.execute(
+      `UPDATE password_reset_tokens
+       SET used_at = NOW()
+       WHERE user_id = ? AND used_at IS NULL`,
+      [userId],
+    );
+
+    await connection.commit();
 
     return res.status(200).json({
       success: true,
-      message: "Password reset successfully",
+      message: "Password reset successfully. You can now log in.",
     });
   } catch (error) {
-    handleError(res, error);
+    if (connection) {
+      await connection.rollback().catch(() => {});
+    }
+
+    return handleError(res, error);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 });
 
