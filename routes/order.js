@@ -39,6 +39,13 @@ const handleError = (res, error) => {
     });
   }
 
+  if (error.code === "VENDOR_ORDER_NOT_FOUND") {
+    return res.status(403).json({
+      success: false,
+      message: error.message,
+    });
+  }
+
   if (error.code === "ORDER_ALREADY_CANCELLED") {
     return res.status(400).json({
       success: false,
@@ -46,7 +53,11 @@ const handleError = (res, error) => {
     });
   }
 
-  if (error.code === "ORDER_CANNOT_BE_CANCELLED") {
+  if (
+    error.code === "ORDER_CANNOT_BE_CANCELLED" ||
+    error.code === "ORDER_CANNOT_BE_UPDATED" ||
+    error.code === "INVALID_VENDOR_STATUS"
+  ) {
     return res.status(400).json({
       success: false,
       message: error.message,
@@ -74,7 +85,10 @@ router.post("/", authenticateUser, authorizeRole("buyer"), async (req, res) => {
     const { buyer, items } = req.body;
 
     if (Number(buyer) !== req.user.buyer_id) {
-      return res.status(403).json({ success: false, message: "You can only create orders for your own buyer account" });
+      return res.status(403).json({
+        success: false,
+        message: "You can only create orders for your own buyer account",
+      });
     }
 
     if (!isValidId(buyer)) {
@@ -125,134 +139,238 @@ router.post("/", authenticateUser, authorizeRole("buyer"), async (req, res) => {
   }
 });
 
-// GET ALL ORDERS
-router.get("/", authenticateUser, authorizeRole("admin", "buyer"), async (req, res) => {
-  try {
-    const orders = req.user.role === "admin"
-      ? await Order.findAll()
-      : await Order.findByBuyerId(req.user.buyer_id);
+// GET VENDOR ORDERS
+router.get(
+  "/vendor/my-orders",
+  authenticateUser,
+  authorizeRole("vendor"),
+  async (req, res) => {
+    try {
+      if (!req.user.vendor_id) {
+        return res.status(403).json({
+          success: false,
+          message: "Vendor profile is not linked to this account",
+        });
+      }
 
-    return res.status(200).json({
-      success: true,
-      count: orders.length,
-      orders,
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
-});
+      const orders = await Order.findByVendorId(req.user.vendor_id);
+
+      return res.status(200).json({
+        success: true,
+        count: orders.length,
+        orders,
+      });
+    } catch (error) {
+      return handleError(res, error);
+    }
+  },
+);
+
+// UPDATE VENDOR FULFILLMENT STATUS
+router.put(
+  "/vendor/:orderId/status",
+  authenticateUser,
+  authorizeRole("vendor"),
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const { status } = req.body;
+
+      if (!isValidId(orderId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid order ID",
+        });
+      }
+
+      if (!["Shipped", "Delivered"].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Status must be Shipped or Delivered",
+        });
+      }
+
+      if (!req.user.vendor_id) {
+        return res.status(403).json({
+          success: false,
+          message: "Vendor profile is not linked to this account",
+        });
+      }
+
+      const order = await Order.updateVendorFulfillmentStatus(
+        Number(orderId),
+        req.user.vendor_id,
+        status,
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Vendor fulfillment status updated successfully",
+        order,
+      });
+    } catch (error) {
+      return handleError(res, error);
+    }
+  },
+);
+
+// GET ALL ORDERS
+router.get(
+  "/",
+  authenticateUser,
+  authorizeRole("admin", "buyer"),
+  async (req, res) => {
+    try {
+      const orders =
+        req.user.role === "admin"
+          ? await Order.findAll()
+          : await Order.findByBuyerId(req.user.buyer_id);
+
+      return res.status(200).json({
+        success: true,
+        count: orders.length,
+        orders,
+      });
+    } catch (error) {
+      return handleError(res, error);
+    }
+  },
+);
 
 // GET ORDER BY ID
-router.get("/:id", authenticateUser, authorizeRole("admin", "buyer"), async (req, res) => {
-  try {
-    const { id } = req.params;
+router.get(
+  "/:id",
+  authenticateUser,
+  authorizeRole("admin", "buyer"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
 
-    if (!isValidId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid order ID",
-      });
-    }
+      if (!isValidId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid order ID",
+        });
+      }
 
-    const order = await Order.findById(Number(id));
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
-    }
-
-    if (req.user.role === "buyer" && order.buyer._id !== req.user.buyer_id) {
-      return res.status(403).json({ success: false, message: "You can only view your own orders" });
-    }
-
-    return res.status(200).json({
-      success: true,
-      order,
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
-});
-
-// UPDATE ORDER STATUS
-router.put("/:id", authenticateUser, authorizeRole("admin"), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-
-    if (!isValidId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid order ID",
-      });
-    }
-
-    const orderId = Number(id);
-
-    const existingOrder = await Order.findById(orderId);
-
-    if (!existingOrder) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
-    }
-
-    if (!canTransitionOrder(existingOrder.status, status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot change an order from ${existingOrder.status} to ${status}`,
-      });
-    }
-
-    const order = await Order.updateStatus(orderId, status);
-
-    return res.status(200).json({
-      success: true,
-      message: "Order status updated successfully",
-      order,
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
-});
-
-// CANCEL ORDER
-router.put("/:id/cancel", authenticateUser, authorizeRole("admin", "buyer"), async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!isValidId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid order ID",
-      });
-    }
-
-    if (req.user.role === "buyer") {
       const order = await Order.findById(Number(id));
 
       if (!order) {
-        return res.status(404).json({ success: false, message: "Order not found" });
+        return res.status(404).json({
+          success: false,
+          message: "Order not found",
+        });
       }
 
-      if (order.buyer._id !== req.user.buyer_id) {
-        return res.status(403).json({ success: false, message: "You can only cancel your own orders" });
+      if (req.user.role === "buyer" && order.buyer._id !== req.user.buyer_id) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only view your own orders",
+        });
       }
+
+      return res.status(200).json({
+        success: true,
+        order,
+      });
+    } catch (error) {
+      return handleError(res, error);
     }
+  },
+);
 
-    const cancelledOrder = await Order.cancel(Number(id));
+// UPDATE ORDER STATUS
+router.put(
+  "/:id",
+  authenticateUser,
+  authorizeRole("admin"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
 
-    return res.status(200).json({
-      success: true,
-      message: "Order cancelled successfully",
-      order: cancelledOrder,
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
-});
+      if (!isValidId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid order ID",
+        });
+      }
+
+      const orderId = Number(id);
+      const existingOrder = await Order.findById(orderId);
+
+      if (!existingOrder) {
+        return res.status(404).json({
+          success: false,
+          message: "Order not found",
+        });
+      }
+
+      if (!canTransitionOrder(existingOrder.status, status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot change an order from ${existingOrder.status} to ${status}`,
+        });
+      }
+
+      const order = await Order.updateStatus(orderId, status);
+
+      return res.status(200).json({
+        success: true,
+        message: "Order status updated successfully",
+        order,
+      });
+    } catch (error) {
+      return handleError(res, error);
+    }
+  },
+);
+
+// CANCEL ORDER
+router.put(
+  "/:id/cancel",
+  authenticateUser,
+  authorizeRole("admin", "buyer"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!isValidId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid order ID",
+        });
+      }
+
+      if (req.user.role === "buyer") {
+        const order = await Order.findById(Number(id));
+
+        if (!order) {
+          return res.status(404).json({
+            success: false,
+            message: "Order not found",
+          });
+        }
+
+        if (order.buyer._id !== req.user.buyer_id) {
+          return res.status(403).json({
+            success: false,
+            message: "You can only cancel your own orders",
+          });
+        }
+      }
+
+      const cancelledOrder = await Order.cancel(Number(id));
+
+      return res.status(200).json({
+        success: true,
+        message: "Order cancelled successfully",
+        order: cancelledOrder,
+      });
+    } catch (error) {
+      return handleError(res, error);
+    }
+  },
+);
 
 module.exports = router;

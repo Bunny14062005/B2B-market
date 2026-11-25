@@ -7,9 +7,6 @@ const authorizeRole = require("../middleware/authorizeRole");
 
 const router = express.Router();
 
-// Vendor records are created during user registration and managed by admins.
-router.use(authenticateUser, authorizeRole("admin"));
-
 const isValidId = (id) => /^[1-9]\d*$/.test(id);
 
 const handleError = (res, error) => {
@@ -34,6 +31,108 @@ const handleError = (res, error) => {
     message: "Internal server error",
   });
 };
+
+// VENDOR: GET OWN COMPANY PROFILE
+router.get(
+  "/me",
+  authenticateUser,
+  authorizeRole("vendor"),
+  async (req, res) => {
+    try {
+      if (!req.user.vendor_id) {
+        return res.status(404).json({
+          success: false,
+          message: "Vendor profile not found",
+        });
+      }
+
+      const vendor = await Vendor.findById(req.user.vendor_id);
+
+      if (!vendor) {
+        return res.status(404).json({
+          success: false,
+          message: "Vendor profile not found",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        vendor,
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
+  },
+);
+
+// VENDOR: UPDATE OWN COMPANY PROFILE
+router.put(
+  "/me",
+  authenticateUser,
+  authorizeRole("vendor"),
+  async (req, res) => {
+    try {
+      if (!req.user.vendor_id) {
+        return res.status(404).json({
+          success: false,
+          message: "Vendor profile not found",
+        });
+      }
+
+      const vendorId = req.user.vendor_id;
+      const existingVendor = await Vendor.findById(vendorId);
+
+      if (!existingVendor) {
+        return res.status(404).json({
+          success: false,
+          message: "Vendor profile not found",
+        });
+      }
+
+      const { companyName, contactName, phone, address, businessType } =
+        req.body;
+
+      const fields = {
+        companyName,
+        contactName,
+        phone,
+        address,
+        businessType,
+      };
+
+      if (
+        Object.values(fields).some(
+          (field) => typeof field !== "string" || !field.trim(),
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "All company profile fields are required",
+        });
+      }
+
+      const vendor = await Vendor.update(vendorId, {
+        companyName: companyName.trim(),
+        contactName: contactName.trim(),
+        email: existingVendor.email,
+        phone: phone.trim(),
+        address: address.trim(),
+        businessType: businessType.trim(),
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Company profile updated successfully",
+        vendor,
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
+  },
+);
+
+// ADMIN ROUTES
+router.use(authenticateUser, authorizeRole("admin"));
 
 // CREATE VENDOR
 router.post("/", async (req, res) => {
@@ -143,7 +242,6 @@ router.put("/:id", async (req, res) => {
     }
 
     const vendorId = Number(id);
-
     const existingVendor = await Vendor.findById(vendorId);
 
     if (!existingVendor) {
@@ -222,7 +320,6 @@ router.delete("/:id", async (req, res) => {
     }
 
     const vendorId = Number(id);
-
     const vendor = await Vendor.findById(vendorId);
 
     if (!vendor) {
@@ -236,9 +333,18 @@ router.delete("/:id", async (req, res) => {
 
     try {
       await connection.beginTransaction();
-      await connection.execute("UPDATE vendors SET is_active = 0 WHERE vendor_id = ?", [vendorId]);
-      await connection.execute("UPDATE users SET is_active = 0 WHERE vendor_id = ?", [vendorId]);
-      await connection.execute("UPDATE products SET is_available = 0 WHERE vendor_id = ?", [vendorId]);
+      await connection.execute(
+        "UPDATE vendors SET is_active = 0 WHERE vendor_id = ?",
+        [vendorId],
+      );
+      await connection.execute(
+        "UPDATE users SET is_active = 0 WHERE vendor_id = ?",
+        [vendorId],
+      );
+      await connection.execute(
+        "UPDATE products SET is_available = 0 WHERE vendor_id = ?",
+        [vendorId],
+      );
       await connection.commit();
     } catch (error) {
       await connection.rollback();
@@ -263,21 +369,33 @@ router.patch("/:id/status", async (req, res) => {
     const { isActive } = req.body;
 
     if (!isValidId(id) || typeof isActive !== "boolean") {
-      return res.status(400).json({ success: false, message: "Valid vendor ID and isActive boolean are required" });
+      return res.status(400).json({
+        success: false,
+        message: "Valid vendor ID and isActive boolean are required",
+      });
     }
 
     const vendor = await Vendor.findById(Number(id));
 
     if (!vendor) {
-      return res.status(404).json({ success: false, message: "Vendor not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
     }
 
     const connection = await pool.getConnection();
 
     try {
       await connection.beginTransaction();
-      await connection.execute("UPDATE vendors SET is_active = ? WHERE vendor_id = ?", [isActive, Number(id)]);
-      await connection.execute("UPDATE users SET is_active = ? WHERE vendor_id = ?", [isActive, Number(id)]);
+      await connection.execute(
+        "UPDATE vendors SET is_active = ? WHERE vendor_id = ?",
+        [isActive, Number(id)],
+      );
+      await connection.execute(
+        "UPDATE users SET is_active = ? WHERE vendor_id = ?",
+        [isActive, Number(id)],
+      );
       await connection.commit();
     } catch (error) {
       await connection.rollback();
@@ -286,7 +404,10 @@ router.patch("/:id/status", async (req, res) => {
       connection.release();
     }
 
-    return res.status(200).json({ success: true, message: `Vendor business ${isActive ? "activated" : "deactivated"} successfully` });
+    return res.status(200).json({
+      success: true,
+      message: `Vendor business ${isActive ? "activated" : "deactivated"} successfully`,
+    });
   } catch (error) {
     return handleError(res, error);
   }

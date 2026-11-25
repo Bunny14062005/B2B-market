@@ -30,12 +30,28 @@ const Order = {
          p.name AS product_name,
          p.price AS product_price,
          p.quantity AS product_stock,
+         p.vendor_id,
+         v.company_name AS vendor_company_name,
          c.name AS product_category
        FROM order_items oi
        INNER JOIN products p ON oi.product_id = p.product_id
+       INNER JOIN vendors v ON p.vendor_id = v.vendor_id
        INNER JOIN categories c ON p.category_id = c.category_id
        WHERE oi.order_id = ?
        ORDER BY oi.order_item_id ASC`,
+      [orderId],
+    );
+
+    const [vendorRows] = await pool.execute(
+      `SELECT
+         voi.vendor_order_item_id,
+         voi.vendor_id,
+         voi.status,
+         v.company_name
+       FROM vendor_order_items voi
+       INNER JOIN vendors v ON voi.vendor_id = v.vendor_id
+       WHERE voi.order_id = ?
+       ORDER BY voi.vendor_order_item_id ASC`,
       [orderId],
     );
 
@@ -55,9 +71,21 @@ const Order = {
           price: Number(item.product_price),
           quantity: item.product_stock,
           category: item.product_category,
+          vendor: {
+            _id: item.vendor_id,
+            companyName: item.vendor_company_name,
+          },
         },
         quantity: item.quantity,
         unitPrice: Number(item.unit_price),
+      })),
+      vendorFulfillments: vendorRows.map((vendor) => ({
+        _id: vendor.vendor_order_item_id,
+        vendor: {
+          _id: vendor.vendor_id,
+          companyName: vendor.company_name,
+        },
+        status: vendor.status,
       })),
       totalAmount: Number(order.total_amount),
       status: order.status,
@@ -83,7 +111,28 @@ const Order = {
     return Promise.all(rows.map((row) => this.findById(row.order_id)));
   },
 
-  // CREATE ORDER AND DEDUCT STOCK IN ONE TRANSACTION
+  async findByVendorId(vendorId) {
+    const [rows] = await pool.execute(
+      `SELECT order_id
+       FROM vendor_order_items
+       WHERE vendor_id = ?
+       ORDER BY created_at DESC`,
+      [vendorId],
+    );
+
+    const orders = await Promise.all(
+      rows.map((row) => this.findById(row.order_id)),
+    );
+
+    return orders.map((order) => ({
+      ...order,
+      items: order.items.filter((item) => item.product.vendor._id === vendorId),
+      vendorFulfillments: order.vendorFulfillments.filter(
+        (fulfillment) => fulfillment.vendor._id === vendorId,
+      ),
+    }));
+  },
+
   async create(orderData) {
     const connection = await pool.getConnection();
 
@@ -105,10 +154,11 @@ const Order = {
 
       let totalAmount = 0;
       const orderItems = [];
+      const vendorIds = new Set();
 
       for (const item of items) {
         const [productRows] = await connection.execute(
-          `SELECT product_id, name, price, quantity
+          `SELECT product_id, name, price, quantity, vendor_id
            FROM products
            WHERE product_id = ? AND is_available = 1
            FOR UPDATE`,
@@ -135,9 +185,12 @@ const Order = {
 
         orderItems.push({
           product: product.product_id,
+          vendor: product.vendor_id,
           quantity: item.quantity,
           unitPrice,
         });
+
+        vendorIds.add(product.vendor_id);
 
         await connection.execute(
           `UPDATE products
@@ -166,6 +219,15 @@ const Order = {
         );
       }
 
+      for (const vendorId of vendorIds) {
+        await connection.execute(
+          `INSERT INTO vendor_order_items
+           (order_id, vendor_id, status)
+           VALUES (?, ?, 'Pending')`,
+          [orderId, vendorId],
+        );
+      }
+
       await connection.commit();
 
       return this.findById(orderId);
@@ -177,17 +239,144 @@ const Order = {
     }
   },
 
-  // UPDATE ORDER STATUS
   async updateStatus(orderId, status) {
-    await pool.execute("UPDATE orders SET status = ? WHERE order_id = ?", [
-      status,
-      orderId,
-    ]);
+    const connection = await pool.getConnection();
 
-    return this.findById(orderId);
+    try {
+      await connection.beginTransaction();
+
+      await connection.execute(
+        "UPDATE orders SET status = ? WHERE order_id = ?",
+        [status, orderId],
+      );
+
+      await connection.execute(
+        `UPDATE vendor_order_items
+         SET status = ?
+         WHERE order_id = ?`,
+        [status, orderId],
+      );
+
+      await connection.commit();
+
+      return this.findById(orderId);
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   },
 
-  // CANCEL ORDER AND RESTOCK PRODUCTS IN ONE TRANSACTION
+  async updateVendorFulfillmentStatus(orderId, vendorId, status) {
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      const [orderRows] = await connection.execute(
+        `SELECT order_id, status
+         FROM orders
+         WHERE order_id = ?
+         FOR UPDATE`,
+        [orderId],
+      );
+
+      const order = orderRows[0];
+
+      if (!order) {
+        const error = new Error("Order not found");
+        error.code = "ORDER_NOT_FOUND";
+        throw error;
+      }
+
+      if (order.status === "Cancelled") {
+        const error = new Error("Cannot update a cancelled order");
+        error.code = "ORDER_CANNOT_BE_UPDATED";
+        throw error;
+      }
+
+      const [fulfillmentRows] = await connection.execute(
+        `SELECT vendor_order_item_id, status
+         FROM vendor_order_items
+         WHERE order_id = ? AND vendor_id = ?
+         FOR UPDATE`,
+        [orderId, vendorId],
+      );
+
+      const fulfillment = fulfillmentRows[0];
+
+      if (!fulfillment) {
+        const error = new Error(
+          "This order does not belong to your vendor account",
+        );
+        error.code = "VENDOR_ORDER_NOT_FOUND";
+        throw error;
+      }
+
+      const allowedTransitions = {
+        Pending: ["Shipped"],
+        Shipped: ["Delivered"],
+        Delivered: [],
+        Cancelled: [],
+      };
+
+      if (!allowedTransitions[fulfillment.status]?.includes(status)) {
+        const error = new Error(
+          `Cannot change fulfillment from ${fulfillment.status} to ${status}`,
+        );
+        error.code = "INVALID_VENDOR_STATUS";
+        throw error;
+      }
+
+      await connection.execute(
+        `UPDATE vendor_order_items
+         SET status = ?
+         WHERE vendor_order_item_id = ?`,
+        [status, fulfillment.vendor_order_item_id],
+      );
+
+      const [allFulfillments] = await connection.execute(
+        `SELECT status
+         FROM vendor_order_items
+         WHERE order_id = ?`,
+        [orderId],
+      );
+
+      const statuses = allFulfillments.map((item) => item.status);
+
+      let overallStatus = "Pending";
+
+      if (
+        statuses.length > 0 &&
+        statuses.every((item) => item === "Delivered")
+      ) {
+        overallStatus = "Delivered";
+      } else if (
+        statuses.length > 0 &&
+        statuses.every((item) => ["Shipped", "Delivered"].includes(item))
+      ) {
+        overallStatus = "Shipped";
+      }
+
+      await connection.execute(
+        `UPDATE orders
+         SET status = ?
+         WHERE order_id = ?`,
+        [overallStatus, orderId],
+      );
+
+      await connection.commit();
+
+      return this.findById(orderId);
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  },
+
   async cancel(orderId) {
     const connection = await pool.getConnection();
 
@@ -258,6 +447,13 @@ const Order = {
 
       await connection.execute(
         `UPDATE orders
+         SET status = 'Cancelled'
+         WHERE order_id = ?`,
+        [orderId],
+      );
+
+      await connection.execute(
+        `UPDATE vendor_order_items
          SET status = 'Cancelled'
          WHERE order_id = ?`,
         [orderId],

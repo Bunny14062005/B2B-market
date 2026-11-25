@@ -2,10 +2,8 @@ const express = require("express");
 
 const Review = require("../models/Review");
 const Product = require("../models/Product");
-const pool = require("../config/db");
 
 const authenticateUser = require("../middleware/auth");
-const authorizeRole = require("../middleware/authorizeRole");
 
 const router = express.Router();
 
@@ -43,88 +41,74 @@ const handleError = (res, error) => {
 };
 
 // CREATE REVIEW
-router.post(
-  "/",
-  authenticateUser,
-  authorizeRole("buyer"),
-  async (req, res) => {
-    try {
-      const { product, rating, comment } = req.body;
-
-      if (!product || rating === undefined) {
-        return res.status(400).json({
-          success: false,
-          message: "Product and rating are required",
-        });
-      }
-
-      if (!isValidId(product)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid product ID",
-        });
-      }
-
-      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-        return res.status(400).json({
-          success: false,
-          message: "Rating must be a whole number between 1 and 5",
-        });
-      }
-
-      if (
-        comment !== undefined &&
-        (typeof comment !== "string" || comment.length > 1000)
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Comment must be text with a maximum of 1000 characters",
-        });
-      }
-
-      const existingProduct = await Product.findById(Number(product));
-
-      if (!existingProduct) {
-        return res.status(404).json({
-          success: false,
-          message: "Product not found",
-        });
-      }
-
-      const [purchases] = await pool.execute(
-        `SELECT 1
-         FROM orders o
-         INNER JOIN order_items oi ON oi.order_id = o.order_id
-         WHERE o.buyer_id = ? AND oi.product_id = ? AND o.status = 'Delivered'
-         LIMIT 1`,
-        [req.user.buyer_id, Number(product)],
-      );
-
-      if (purchases.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: "You can only review products from delivered orders",
-        });
-      }
-
-      const review = await Review.create({
-        product: Number(product),
-        user: req.user.user_id,
-        role: req.user.role,
-        rating,
-        comment: comment || "",
+router.post("/", authenticateUser, async (req, res) => {
+  try {
+    if (!["buyer", "vendor"].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only buyers and vendors can create reviews",
       });
-
-      return res.status(201).json({
-        success: true,
-        message: "Review created successfully",
-        review,
-      });
-    } catch (error) {
-      return handleError(res, error);
     }
-  },
-);
+
+    const { product, rating, comment } = req.body;
+
+    if (!product || rating === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "Product and rating are required",
+      });
+    }
+
+    if (!isValidId(product)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid product ID",
+      });
+    }
+
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({
+        success: false,
+        message: "Rating must be a whole number between 1 and 5",
+      });
+    }
+
+    if (
+      comment !== undefined &&
+      (typeof comment !== "string" || comment.length > 1000)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Comment must be text with a maximum of 1000 characters",
+      });
+    }
+
+    const existingProduct = await Product.findById(Number(product));
+
+    if (!existingProduct) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    const review = await Review.create({
+      product: Number(product),
+      user: req.user.user_id,
+      role: req.user.role,
+      rating,
+      comment: comment || "",
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Review created successfully",
+      review,
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
 
 // GET ALL REVIEWS
 router.get("/", authenticateUser, async (req, res) => {
@@ -251,7 +235,6 @@ router.put("/:id", authenticateUser, async (req, res) => {
     }
 
     const reviewId = Number(id);
-
     const existingReview = await Review.findById(reviewId);
 
     if (!existingReview) {
@@ -261,8 +244,8 @@ router.put("/:id", authenticateUser, async (req, res) => {
       });
     }
 
-    const isOwner = existingReview.user._id === req.user.user_id;
-
+    const isOwner =
+      Number(existingReview.user._id) === Number(req.user.user_id);
     const isAdmin = req.user.role === "admin";
 
     if (!isOwner && !isAdmin) {
@@ -300,7 +283,6 @@ router.delete("/:id", authenticateUser, async (req, res) => {
     }
 
     const reviewId = Number(id);
-
     const existingReview = await Review.findById(reviewId);
 
     if (!existingReview) {
@@ -310,8 +292,8 @@ router.delete("/:id", authenticateUser, async (req, res) => {
       });
     }
 
-    const isOwner = existingReview.user._id === req.user.user_id;
-
+    const isOwner =
+      Number(existingReview.user._id) === Number(req.user.user_id);
     const isAdmin = req.user.role === "admin";
 
     if (!isOwner && !isAdmin) {

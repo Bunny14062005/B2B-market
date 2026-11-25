@@ -41,7 +41,6 @@ const handleError = (res, error) => {
   });
 };
 
-// Retrieve product with its category and vendor details.
 const getProductDetails = async (productId) => {
   const [rows] = await pool.execute(
     `SELECT
@@ -67,7 +66,6 @@ const getProductDetails = async (productId) => {
   return rows[0] || null;
 };
 
-// Convert SQL column names into API-friendly field names.
 const formatProduct = (product) => {
   if (!product) return null;
 
@@ -94,7 +92,6 @@ const formatProduct = (product) => {
   };
 };
 
-// Find a category using its name.
 const findCategoryId = async (categoryName) => {
   const [rows] = await pool.execute(
     `SELECT category_id
@@ -107,7 +104,6 @@ const findCategoryId = async (categoryName) => {
   return rows[0]?.category_id || null;
 };
 
-// Validate product input.
 const validateProduct = ({ name, price, quantity, category }) => {
   if (
     typeof name !== "string" ||
@@ -141,77 +137,127 @@ const validateProduct = ({ name, price, quantity, category }) => {
   return null;
 };
 
+// VENDOR: GET OWN PRODUCTS INCLUDING ARCHIVED PRODUCTS
+router.get(
+  "/vendor/my-products",
+  authenticateUser,
+  authorizeRole("vendor"),
+  async (req, res) => {
+    try {
+      if (!req.user.vendor_id) {
+        return res.status(404).json({
+          success: false,
+          message: "Vendor profile not found",
+        });
+      }
+
+      const products = await Product.findByVendorId(req.user.vendor_id);
+
+      return res.status(200).json({
+        success: true,
+        count: products.length,
+        products: products.map((product) => ({
+          _id: product.product_id,
+          name: product.name,
+          price: Number(product.price),
+          quantity: product.quantity,
+          category: product.category,
+          vendor: {
+            _id: product.vendor_id,
+            companyName: product.vendor_name,
+          },
+          averageRating: Number(product.average_rating),
+          numReviews: product.num_reviews,
+          isAvailable: Boolean(product.is_available),
+          createdAt: product.created_at,
+          updatedAt: product.updated_at,
+        })),
+      });
+    } catch (error) {
+      handleError(res, error);
+    }
+  },
+);
+
 // CREATE PRODUCT
-router.post("/", authenticateUser, authorizeRole("admin", "vendor"), async (req, res) => {
-  try {
-    const { name, price, quantity, category, vendor } = req.body;
+router.post(
+  "/",
+  authenticateUser,
+  authorizeRole("admin", "vendor"),
+  async (req, res) => {
+    try {
+      const { name, price, quantity, category, vendor } = req.body;
 
-    const validationError = validateProduct({
-      name,
-      price,
-      quantity,
-      category,
-    });
-
-    if (validationError) {
-      return res.status(400).json({
-        success: false,
-        message: validationError,
+      const validationError = validateProduct({
+        name,
+        price,
+        quantity,
+        category,
       });
-    }
 
-    if (vendor === undefined || !isValidId(String(vendor))) {
-      return res.status(400).json({
-        success: false,
-        message: "Valid vendor ID is required",
+      if (validationError) {
+        return res.status(400).json({
+          success: false,
+          message: validationError,
+        });
+      }
+
+      if (vendor === undefined || !isValidId(String(vendor))) {
+        return res.status(400).json({
+          success: false,
+          message: "Valid vendor ID is required",
+        });
+      }
+
+      const vendorId = Number(vendor);
+
+      if (req.user.role === "vendor" && req.user.vendor_id !== vendorId) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only create products for your own vendor account",
+        });
+      }
+
+      const existingVendor = await Vendor.findById(vendorId);
+
+      if (!existingVendor) {
+        return res.status(404).json({
+          success: false,
+          message: "Vendor not found",
+        });
+      }
+
+      const categoryId = await findCategoryId(category);
+
+      if (!categoryId) {
+        return res.status(404).json({
+          success: false,
+          message: "Category not found",
+        });
+      }
+
+      const createdProduct = await Product.create({
+        name: name.trim(),
+        price: Number(price),
+        quantity: Number(quantity),
+        category_id: categoryId,
+        vendor_id: vendorId,
       });
-    }
 
-    const vendorId = Number(vendor);
+      const productDetails = await getProductDetails(createdProduct.product_id);
 
-    if (req.user.role === "vendor" && req.user.vendor_id !== vendorId) {
-      return res.status(403).json({ success: false, message: "You can only create products for your own vendor account" });
-    }
-
-    const existingVendor = await Vendor.findById(vendorId);
-
-    if (!existingVendor) {
-      return res.status(404).json({
-        success: false,
-        message: "Vendor not found",
+      return res.status(201).json({
+        success: true,
+        message: "Product created successfully",
+        product: formatProduct(productDetails),
       });
+    } catch (error) {
+      handleError(res, error);
     }
+  },
+);
 
-    const categoryId = await findCategoryId(category);
-
-    if (!categoryId) {
-      return res.status(404).json({
-        success: false,
-        message: "Category not found",
-      });
-    }
-
-    const createdProduct = await Product.create({
-      name: name.trim(),
-      price: Number(price),
-      quantity: Number(quantity),
-      category_id: categoryId,
-      vendor_id: vendorId,
-    });
-
-    const productDetails = await getProductDetails(createdProduct.product_id);
-
-    return res.status(201).json({
-      success: true,
-      message: "Product created successfully",
-      product: formatProduct(productDetails),
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
-
-// GET ALL PRODUCTS WITH SEARCH, FILTERING AND SORTING
+// GET ALL AVAILABLE PRODUCTS
 router.get("/", async (req, res) => {
   try {
     const { search, category, sort } = req.query;
@@ -229,8 +275,7 @@ router.get("/", async (req, res) => {
       values.push(category);
     }
 
-    const whereClause =
-      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
     let sortOption = "p.created_at DESC";
 
@@ -238,23 +283,18 @@ router.get("/", async (req, res) => {
       case "price_asc":
         sortOption = "p.price ASC";
         break;
-
       case "price_desc":
         sortOption = "p.price DESC";
         break;
-
       case "name_asc":
         sortOption = "p.name ASC";
         break;
-
       case "name_desc":
         sortOption = "p.name DESC";
         break;
-
       case "oldest":
         sortOption = "p.created_at ASC";
         break;
-
       case "newest":
       default:
         sortOption = "p.created_at DESC";
@@ -329,168 +369,212 @@ router.get("/:id", async (req, res) => {
 });
 
 // UPDATE PRODUCT
-router.put("/:id", authenticateUser, authorizeRole("admin", "vendor"), async (req, res) => {
-  try {
-    const { id } = req.params;
+router.put(
+  "/:id",
+  authenticateUser,
+  authorizeRole("admin", "vendor"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
 
-    if (!isValidId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid product ID",
+      if (!isValidId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid product ID",
+        });
+      }
+
+      const productId = Number(id);
+      const existingProduct = await getProductDetails(productId);
+
+      if (!existingProduct) {
+        return res.status(404).json({
+          success: false,
+          message: "Product not found",
+        });
+      }
+
+      if (
+        req.user.role === "vendor" &&
+        req.user.vendor_id !== existingProduct.vendor_id
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only update your own products",
+        });
+      }
+
+      const { name, price, quantity, category, vendor } = req.body;
+
+      const updatedData = {
+        name: name === undefined ? existingProduct.name : name,
+        price: price === undefined ? existingProduct.price : price,
+        quantity: quantity === undefined ? existingProduct.quantity : quantity,
+        category: category === undefined ? existingProduct.category : category,
+        vendor: vendor === undefined ? existingProduct.vendor_id : vendor,
+      };
+
+      const validationError = validateProduct(updatedData);
+
+      if (validationError) {
+        return res.status(400).json({
+          success: false,
+          message: validationError,
+        });
+      }
+
+      if (!isValidId(String(updatedData.vendor))) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid vendor ID",
+        });
+      }
+
+      const vendorId = Number(updatedData.vendor);
+
+      if (req.user.role === "vendor" && req.user.vendor_id !== vendorId) {
+        return res.status(403).json({
+          success: false,
+          message: "You cannot transfer a product to another vendor",
+        });
+      }
+
+      const existingVendor = await Vendor.findById(vendorId);
+
+      if (!existingVendor) {
+        return res.status(404).json({
+          success: false,
+          message: "Vendor not found",
+        });
+      }
+
+      const categoryId = await findCategoryId(updatedData.category);
+
+      if (!categoryId) {
+        return res.status(404).json({
+          success: false,
+          message: "Category not found",
+        });
+      }
+
+      await Product.update(productId, {
+        name: updatedData.name.trim(),
+        price: Number(updatedData.price),
+        quantity: Number(updatedData.quantity),
+        category_id: categoryId,
+        vendor_id: vendorId,
       });
-    }
 
-    const productId = Number(id);
+      const product = await getProductDetails(productId);
 
-    const existingProduct = await getProductDetails(productId);
-
-    if (!existingProduct) {
-      return res.status(404).json({
-        success: false,
-        message: "Product not found",
+      return res.status(200).json({
+        success: true,
+        message: "Product updated successfully",
+        product: formatProduct(product),
       });
+    } catch (error) {
+      handleError(res, error);
     }
-
-    if (req.user.role === "vendor" && req.user.vendor_id !== existingProduct.vendor_id) {
-      return res.status(403).json({ success: false, message: "You can only update your own products" });
-    }
-
-    const { name, price, quantity, category, vendor } = req.body;
-
-    const updatedData = {
-      name: name === undefined ? existingProduct.name : name,
-      price: price === undefined ? existingProduct.price : price,
-      quantity: quantity === undefined ? existingProduct.quantity : quantity,
-      category: category === undefined ? existingProduct.category : category,
-      vendor: vendor === undefined ? existingProduct.vendor_id : vendor,
-    };
-
-    const validationError = validateProduct(updatedData);
-
-    if (validationError) {
-      return res.status(400).json({
-        success: false,
-        message: validationError,
-      });
-    }
-
-    if (!isValidId(String(updatedData.vendor))) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid vendor ID",
-      });
-    }
-
-    const vendorId = Number(updatedData.vendor);
-
-    if (req.user.role === "vendor" && req.user.vendor_id !== vendorId) {
-      return res.status(403).json({ success: false, message: "You cannot transfer a product to another vendor" });
-    }
-
-    const existingVendor = await Vendor.findById(vendorId);
-
-    if (!existingVendor) {
-      return res.status(404).json({
-        success: false,
-        message: "Vendor not found",
-      });
-    }
-
-    const categoryId = await findCategoryId(updatedData.category);
-
-    if (!categoryId) {
-      return res.status(404).json({
-        success: false,
-        message: "Category not found",
-      });
-    }
-
-    await Product.update(productId, {
-      name: updatedData.name.trim(),
-      price: Number(updatedData.price),
-      quantity: Number(updatedData.quantity),
-      category_id: categoryId,
-      vendor_id: vendorId,
-    });
-
-    const product = await getProductDetails(productId);
-
-    return res.status(200).json({
-      success: true,
-      message: "Product updated successfully",
-      product: formatProduct(product),
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
+  },
+);
 
 // ARCHIVE PRODUCT
-router.delete("/:id", authenticateUser, authorizeRole("admin", "vendor"), async (req, res) => {
-  try {
-    const { id } = req.params;
+router.delete(
+  "/:id",
+  authenticateUser,
+  authorizeRole("admin", "vendor"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
 
-    if (!isValidId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid product ID",
+      if (!isValidId(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid product ID",
+        });
+      }
+
+      const product = await getProductDetails(Number(id));
+
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          message: "Product not found",
+        });
+      }
+
+      if (
+        req.user.role === "vendor" &&
+        req.user.vendor_id !== product.vendor_id
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only delete your own products",
+        });
+      }
+
+      await Product.setAvailability(Number(id), false);
+
+      return res.status(200).json({
+        success: true,
+        message: "Product archived successfully",
       });
+    } catch (error) {
+      handleError(res, error);
     }
-
-    const product = await getProductDetails(Number(id));
-
-    if (!product) {
-      return res.status(404).json({
-        success: false,
-        message: "Product not found",
-      });
-    }
-
-    if (req.user.role === "vendor" && req.user.vendor_id !== product.vendor_id) {
-      return res.status(403).json({ success: false, message: "You can only delete your own products" });
-    }
-
-    await Product.setAvailability(Number(id), false);
-
-    return res.status(200).json({
-      success: true,
-      message: "Product archived successfully",
-    });
-  } catch (error) {
-    handleError(res, error);
-  }
-});
+  },
+);
 
 // RESTORE OR ARCHIVE PRODUCT
-router.patch("/:id/availability", authenticateUser, authorizeRole("admin", "vendor"), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { isAvailable } = req.body;
+router.patch(
+  "/:id/availability",
+  authenticateUser,
+  authorizeRole("admin", "vendor"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { isAvailable } = req.body;
 
-    if (!isValidId(id) || typeof isAvailable !== "boolean") {
-      return res.status(400).json({ success: false, message: "Valid product ID and isAvailable boolean are required" });
+      if (!isValidId(id) || typeof isAvailable !== "boolean") {
+        return res.status(400).json({
+          success: false,
+          message: "Valid product ID and isAvailable boolean are required",
+        });
+      }
+
+      const product = await getProductDetails(Number(id));
+
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          message: "Product not found",
+        });
+      }
+
+      if (
+        req.user.role === "vendor" &&
+        req.user.vendor_id !== product.vendor_id
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only change availability for your own products",
+        });
+      }
+
+      const updatedProduct = await Product.setAvailability(
+        Number(id),
+        isAvailable,
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: `Product ${isAvailable ? "restored" : "archived"} successfully`,
+        product: updatedProduct,
+      });
+    } catch (error) {
+      return handleError(res, error);
     }
-
-    const product = await getProductDetails(Number(id));
-
-    if (!product) {
-      return res.status(404).json({ success: false, message: "Product not found" });
-    }
-
-    if (req.user.role === "vendor" && req.user.vendor_id !== product.vendor_id) {
-      return res.status(403).json({ success: false, message: "You can only change availability for your own products" });
-    }
-
-    const updatedProduct = await Product.setAvailability(Number(id), isAvailable);
-
-    return res.status(200).json({
-      success: true,
-      message: `Product ${isAvailable ? "restored" : "archived"} successfully`,
-      product: updatedProduct,
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
-});
+  },
+);
 
 module.exports = router;

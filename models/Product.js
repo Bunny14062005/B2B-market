@@ -34,6 +34,23 @@ const Product = {
     return rows;
   },
 
+  async findByVendorId(vendorId) {
+    const [rows] = await pool.execute(
+      `SELECT
+         p.*,
+         c.name AS category,
+         v.company_name AS vendor_name
+       FROM products p
+       INNER JOIN categories c ON p.category_id = c.category_id
+       INNER JOIN vendors v ON p.vendor_id = v.vendor_id
+       WHERE p.vendor_id = ?
+       ORDER BY p.created_at DESC`,
+      [vendorId],
+    );
+
+    return rows;
+  },
+
   async create(productData) {
     const { name, price, quantity, category_id, vendor_id } = productData;
 
