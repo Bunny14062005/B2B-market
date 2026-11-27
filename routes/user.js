@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 
 const pool = require("../config/db");
+const Buyer = require("../models/Buyer");
 const authenticateUser = require("../middleware/auth");
 const { sendPasswordResetEmail } = require("../services/emailService");
 
@@ -176,7 +177,28 @@ router.post("/register", async (req, res) => {
       });
     }
 
+    let buyerId = null;
     let vendorId = null;
+
+    if (role === "buyer") {
+      let buyer = await Buyer.findByEmail(cleanEmail, connection);
+
+      if (!buyer) {
+        buyer = await Buyer.create(
+          {
+            companyName: null,
+            contactName: cleanName,
+            email: cleanEmail,
+            phone: cleanPhone,
+            address: null,
+            businessType: null,
+          },
+          connection,
+        );
+      }
+
+      buyerId = buyer.buyer_id;
+    }
 
     if (role === "vendor") {
       const [existingVendor] = await connection.execute(
@@ -206,8 +228,6 @@ router.post("/register", async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
-
-    const buyerId = null;
 
     const [userResult] = await connection.execute(
       `INSERT INTO users

@@ -1,8 +1,11 @@
 const pool = require("../config/db");
 
+const optionalText = (value) =>
+  typeof value === "string" && value.trim() ? value.trim() : null;
+
 const Buyer = {
-  async findById(buyerId) {
-    const [rows] = await pool.execute(
+  async findById(buyerId, executor = pool) {
+    const [rows] = await executor.execute(
       "SELECT * FROM buyers WHERE buyer_id = ?",
       [buyerId],
     );
@@ -10,10 +13,11 @@ const Buyer = {
     return rows[0] || null;
   },
 
-  async findByEmail(email) {
-    const [rows] = await pool.execute("SELECT * FROM buyers WHERE email = ?", [
-      email.toLowerCase().trim(),
-    ]);
+  async findByEmail(email, executor = pool) {
+    const [rows] = await executor.execute(
+      "SELECT * FROM buyers WHERE email = ?",
+      [email.toLowerCase().trim()],
+    );
 
     return rows[0] || null;
   },
@@ -35,25 +39,25 @@ const Buyer = {
     return this.findById(buyerId);
   },
 
-  async create(buyerData) {
+  async create(buyerData, executor = pool) {
     const { companyName, contactName, email, phone, address, businessType } =
       buyerData;
 
-    const [result] = await pool.execute(
+    const [result] = await executor.execute(
       `INSERT INTO buyers
        (company_name, contact_name, email, phone, address, business_type)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [
-        companyName.trim(),
+        optionalText(companyName),
         contactName.trim(),
         email.toLowerCase().trim(),
         phone.trim(),
-        address.trim(),
-        businessType.trim(),
+        optionalText(address),
+        optionalText(businessType),
       ],
     );
 
-    return this.findById(result.insertId);
+    return this.findById(result.insertId, executor);
   },
 
   async update(buyerId, buyerData) {
@@ -70,19 +74,18 @@ const Buyer = {
            business_type = ?
        WHERE buyer_id = ?`,
       [
-        companyName,
-        contactName,
+        optionalText(companyName),
+        contactName.trim(),
         email.toLowerCase().trim(),
-        phone,
-        address,
-        businessType,
+        phone.trim(),
+        optionalText(address),
+        optionalText(businessType),
         buyerId,
       ],
     );
 
     return this.findById(buyerId);
   },
-
 };
 
 module.exports = Buyer;

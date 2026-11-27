@@ -9,7 +9,7 @@ const authorizeRole = require("../middleware/authorizeRole");
 const router = express.Router();
 
 const isValidId = (id) =>
-  /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id));
+  /^[1-9]\d*$/.test(String(id)) && Number.isSafeInteger(Number(id));
 
 const handleError = (res, error) => {
   if (error.code === "ER_DUP_ENTRY") {
@@ -92,13 +92,15 @@ const formatProduct = (product) => {
   };
 };
 
-const findCategoryId = async (categoryName) => {
+// CATEGORY LOOKUP — CATEGORY MUST BELONG TO THE SELECTED VENDOR
+const findCategoryId = async (categoryName, vendorId) => {
   const [rows] = await pool.execute(
     `SELECT category_id
      FROM categories
      WHERE LOWER(name) = LOWER(?)
+       AND vendor_id = ?
      LIMIT 1`,
-    [categoryName.trim()],
+    [categoryName.trim(), vendorId],
   );
 
   return rows[0]?.category_id || null;
@@ -202,7 +204,7 @@ router.post(
         });
       }
 
-      if (vendor === undefined || !isValidId(String(vendor))) {
+      if (vendor === undefined || !isValidId(vendor)) {
         return res.status(400).json({
           success: false,
           message: "Valid vendor ID is required",
@@ -211,7 +213,10 @@ router.post(
 
       const vendorId = Number(vendor);
 
-      if (req.user.role === "vendor" && req.user.vendor_id !== vendorId) {
+      if (
+        req.user.role === "vendor" &&
+        Number(req.user.vendor_id) !== vendorId
+      ) {
         return res.status(403).json({
           success: false,
           message: "You can only create products for your own vendor account",
@@ -227,12 +232,12 @@ router.post(
         });
       }
 
-      const categoryId = await findCategoryId(category);
+      const categoryId = await findCategoryId(category, vendorId);
 
       if (!categoryId) {
         return res.status(404).json({
           success: false,
-          message: "Category not found",
+          message: "Category not found for the selected vendor",
         });
       }
 
@@ -257,7 +262,7 @@ router.post(
   },
 );
 
-// GET ALL AVAILABLE PRODUCTS
+// GET ALL AVAILABLE PRODUCTS — PUBLIC BUYER CATALOGUE
 router.get("/", async (req, res) => {
   try {
     const { search, category, sort } = req.query;
@@ -283,18 +288,23 @@ router.get("/", async (req, res) => {
       case "price_asc":
         sortOption = "p.price ASC";
         break;
+
       case "price_desc":
         sortOption = "p.price DESC";
         break;
+
       case "name_asc":
         sortOption = "p.name ASC";
         break;
+
       case "name_desc":
         sortOption = "p.name DESC";
         break;
+
       case "oldest":
         sortOption = "p.created_at ASC";
         break;
+
       case "newest":
       default:
         sortOption = "p.created_at DESC";
@@ -338,7 +348,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET PRODUCT BY ID
+// GET PRODUCT BY ID — PUBLIC
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -396,7 +406,7 @@ router.put(
 
       if (
         req.user.role === "vendor" &&
-        req.user.vendor_id !== existingProduct.vendor_id
+        Number(req.user.vendor_id) !== Number(existingProduct.vendor_id)
       ) {
         return res.status(403).json({
           success: false,
@@ -423,7 +433,7 @@ router.put(
         });
       }
 
-      if (!isValidId(String(updatedData.vendor))) {
+      if (!isValidId(updatedData.vendor)) {
         return res.status(400).json({
           success: false,
           message: "Invalid vendor ID",
@@ -432,7 +442,10 @@ router.put(
 
       const vendorId = Number(updatedData.vendor);
 
-      if (req.user.role === "vendor" && req.user.vendor_id !== vendorId) {
+      if (
+        req.user.role === "vendor" &&
+        Number(req.user.vendor_id) !== vendorId
+      ) {
         return res.status(403).json({
           success: false,
           message: "You cannot transfer a product to another vendor",
@@ -448,12 +461,12 @@ router.put(
         });
       }
 
-      const categoryId = await findCategoryId(updatedData.category);
+      const categoryId = await findCategoryId(updatedData.category, vendorId);
 
       if (!categoryId) {
         return res.status(404).json({
           success: false,
-          message: "Category not found",
+          message: "Category not found for the selected vendor",
         });
       }
 
@@ -505,7 +518,7 @@ router.delete(
 
       if (
         req.user.role === "vendor" &&
-        req.user.vendor_id !== product.vendor_id
+        Number(req.user.vendor_id) !== Number(product.vendor_id)
       ) {
         return res.status(403).json({
           success: false,
@@ -553,7 +566,7 @@ router.patch(
 
       if (
         req.user.role === "vendor" &&
-        req.user.vendor_id !== product.vendor_id
+        Number(req.user.vendor_id) !== Number(product.vendor_id)
       ) {
         return res.status(403).json({
           success: false,
@@ -572,7 +585,7 @@ router.patch(
         product: updatedProduct,
       });
     } catch (error) {
-      return handleError(res, error);
+      handleError(res, error);
     }
   },
 );
