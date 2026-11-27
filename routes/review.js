@@ -92,6 +92,15 @@ router.post("/", authenticateUser, async (req, res) => {
       });
     }
 
+    if (
+      req.user.role === "vendor" &&
+      Number(existingProduct.vendor_id) !== Number(req.user.vendor_id)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only review your own products",
+      });
+    }
     const review = await Review.create({
       product: Number(product),
       user: req.user.user_id,
