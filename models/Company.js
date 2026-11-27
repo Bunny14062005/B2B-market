@@ -5,6 +5,7 @@ const formatCompany = (company) => {
 
   return {
     _id: company.company_id,
+    recordType: "company",
     companyName: company.company_name,
     email: company.email,
     phone: company.phone,
@@ -15,13 +16,35 @@ const formatCompany = (company) => {
   };
 };
 
+const formatVendorCompany = (vendor) => ({
+  _id: vendor.vendor_id,
+  recordType: "vendor",
+  companyName: vendor.company_name,
+  contactName: vendor.contact_name,
+  email: vendor.email,
+  phone: vendor.phone,
+  address: vendor.address,
+  businessType: vendor.business_type,
+  businessDescription: vendor.business_type,
+  createdAt: vendor.created_at,
+  updatedAt: vendor.updated_at || null,
+});
+
 const Company = {
   async findAll() {
-    const [rows] = await pool.execute(
-      "SELECT * FROM companies ORDER BY company_id DESC",
-    );
+    const [companyRows, vendorRows] = await Promise.all([
+      pool.execute("SELECT * FROM companies ORDER BY company_id DESC"),
+      pool.execute("SELECT * FROM vendors ORDER BY created_at DESC"),
+    ]);
 
-    return rows.map(formatCompany);
+    const companies = companyRows[0].map(formatCompany);
+    const vendorCompanies = vendorRows[0].map(formatVendorCompany);
+
+    return [...vendorCompanies, ...companies].sort(
+      (a, b) =>
+        new Date(b.createdAt || 0).getTime() -
+        new Date(a.createdAt || 0).getTime(),
+    );
   },
 
   async findById(companyId) {
